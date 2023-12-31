@@ -1,26 +1,29 @@
-# Resume-parser contents
 import re
 import os
 import tempfile
+import pinecone
+from langchain.vectorstores import Pinecone
 
 import streamlit as st
 from langchain.chains import RetrievalQA
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
+# from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.llms import HuggingFaceHub
+# from langchain.vectorstores import FAISS
 from langchain.document_loaders import PyPDFLoader
 from langchain.prompts.prompt import PromptTemplate
-from dotenv import load_dotenv
-import os
+# from langchain.embeddings.openai import OpenAIEmbeddings
 
-# from langchain import HuggingFaceHub
-from langchain.llms import HuggingFaceHub
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Access the API key
 huggingface_api_token = os.getenv("HUGGINGGACE_API_TOKEN")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+pinecone_api_key = os.getenv("PINECONE_API_KEY")
 
 def initialize_session_state():
     """
@@ -34,7 +37,6 @@ def initialize_session_state():
 
     if 'past' not in st.session_state:
         st.session_state['past'] = []
-
 
 def parsing_conv_chat(query, chain, history):
     """
@@ -91,13 +93,13 @@ def display_parsing_history(chain):
         with reply_container:
             for i in range(len(st.session_state['generated'])):
                 # Display user's input
-                with st.chat_message(name='user'):
+                with st.chat_message(name='User'):
                     st.write(st.session_state["past"][i])
 
                 # Display generated response
                 with st.chat_message(name="RP"):
                     st.write(st.session_state["generated"][i])
-    
+
 def create_retrieval_chain(vector_store):
     '''
     With some standard prompting this funciton returns
@@ -105,44 +107,40 @@ def create_retrieval_chain(vector_store):
     '''
     model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 
-    # inference = InferenceClient(repo_id=model_id, token=HUGGINGGACE_API_TOKEN)
-
     llm = HuggingFaceHub(huggingfacehub_api_token=huggingface_api_token,
                          repo_id=model_id,
+
                          model_kwargs={"temperature": 0.1,
                                        "max_new_tokens": 200})
-    
     template = """
-    <s>[INST]
     I want you to act as a Hiring Manager for a Tech Company.
-    The name of the user is given at top part of the document, so find the name and if the name is asked then return in single word.
-    For Education related question get answer from Education portion,
-    For projects related question get answer from projects portion,
-    For certificates related question get answer from certificates portion,
-    For interested areas or hobbies related question get answer from Interest or Hobby portion,
-    For work experience related question get answer from work experience portion,
-    For technical Skills related question get answer from technical Skills portion,
-    The date are present in start to end format for Experience and Education portion.
-    There may not exist any of above portion then return "Relevent information is not provided".
+    Your job is to extract the relevant information from the  and provide answer to the user about the candidate.
+    The name of the candidate is given at top part of the document, so find the name and if the name is asked then return the name.
+    For Education related question, get answer from the Education section,
+    For projects related questions, get answer from the projects section,
+    For certificates related questions, get answer from certification or certificates section,
+    For work experience related questions, get answer from work experience or experience section,
+    For technical Skills related question get answer from technical Skills or skills section,
+    There may not exist any of above section then return "Relevent information is not provided".
     
     Context: {context}
 
     Question: {question}
 
-    [/INST]
     """
 
     PROMPT = PromptTemplate(
         template=template, input_variables=["context", "question"]
     )
+
     chain_type_kwargs = {"prompt": PROMPT}
+
     qa = RetrievalQA.from_chain_type(
         llm=llm, chain_type="stuff",
         retriever=vector_store.as_retriever(),
         chain_type_kwargs=chain_type_kwargs
     )
     return qa
-
 
 def resume_parser():
     '''
@@ -185,21 +183,40 @@ def resume_parser():
                 text.extend(loader.load())
                 os.remove(temp_file_path)
 
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=10000, chunk_overlap=20)
+        text_splitter = CharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=80,
+        separator = " ",
+        length_function=len
+        )
+
         text_chunks = text_splitter.split_documents(text)
+        # num_pages = len(text_chunks)
+        # print(num_pages)
+        # print(text[1].page_content)
+        # breakpoint()
 
         # Create embeddings
+        model_name = "sentence-transformers/all-mpnet-base-v2"
+        model_kwargs = {'device': 'cpu'}
+        encode_kwargs = {'normalize_embeddings': False}
+
+        # embeddings = OpenAIEmbeddings(api_key=openai_api_key)
+
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'}
+            model_name=model_name,
+            model_kwargs=model_kwargs,
+            encode_kwargs=encode_kwargs
         )
 
         # Create vector store
-        vector_store = FAISS.from_documents(text_chunks, embedding=embeddings)
+        pinecone.init(
+            api_key=pinecone_api_key,
+            environment="gcp-starter"
+        )
+        index_name = "resume-parser"
 
-        # Create the chain object
-        # chain = create_conversational_chain(vector_store)
+        vector_store = Pinecone.from_documents(text_chunks, embeddings, index_name=index_name)
         chain = create_retrieval_chain(vector_store)
 
         st.markdown(
@@ -210,7 +227,7 @@ def resume_parser():
             unsafe_allow_html=True
         )
 
-        with st.chat_message(name="Rp"):
+        with st.chat_message(name="RP"):
             st.write("Start Parsing The Uploaded Resume.")
         display_parsing_history(chain)
 
