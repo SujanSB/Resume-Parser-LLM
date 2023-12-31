@@ -43,6 +43,6 @@ Visit the provided URL in your web browser to access the Resume Parser.
 
 ## Acknowledgments
 - [Streamlit](https://streamlit.io/)
-- [Langchain](https://github.com/Mistral-7B/langchain)
+- [Langchain](https://python.langchain.com/docs/get_started/introduction)
 - [Pinecone](https://www.pinecone.io/)
 - [Hugging Face](https://huggingface.co/)
